@@ -125,16 +125,21 @@ class SerialCommander:
     def _job(self):
 
         def serial_write_read(data=None):
-            if data:
-                self.serial_device.write(data)
-            time.sleep(1)
-            readdata = self.serial_device.read_all()
-            if readdata:
-                readlines = [
-                    e for e in [e.strip() for e in readdata.split(b"\n")]
-                    if e
-                ]
-                for l in readlines: self.read_queue.put(l)
+            try:
+                if data:
+                    self.serial_device.write(data)
+                time.sleep(1)
+                readdata = self.serial_device.read_all()
+                if readdata:
+                    readlines = [
+                        e for e in [e.strip() for e in readdata.split(b"\n")]
+                        if e
+                    ]
+                    for l in readlines: self.read_queue.put(l)
+            except Exception as e:
+                self.flag_exit.set()
+                raise e
+                
                 
         time.sleep(0.5)
         while True:
@@ -189,7 +194,7 @@ if __name__ == "__main__":
 
         i = 0
         
-        while True:
+        while not s.flag_exit.is_set():
             i += 1
 
             if i == 3:
