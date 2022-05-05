@@ -9,13 +9,17 @@ import queue
 import re
 import json
 
+from .event import EventEmitter
 
 
-class ArduinoStateTracker:
+
+class ArduinoStateTracker(EventEmitter):
 
     MAGIC_WORD = "NA433GATEWAY"
 
     def __init__(self):
+        EventEmitter.__init__(self)
+
         self.last_update = 0
         self.signal_buffer = None
         self.connected = False
@@ -88,7 +92,8 @@ class ArduinoStateTracker:
 
             except Exception as e:
                 print(e)
-        print(str(self))
+
+        self(str(self))
 
     def __str__(self):
         return json.dumps({
@@ -138,11 +143,10 @@ class SerialCommander:
                     for l in readlines: self.read_queue.put(l)
             except Exception as e:
                 self.flag_exit.set()
-                raise e
-                
+                print(e)
                 
         time.sleep(0.5)
-        while True:
+        while not self.flag_exit.is_set():
             if self.flag_exit.is_set(): break
             cycle_id = os.urandom(16).hex().encode("ascii")
 
@@ -160,8 +164,8 @@ class SerialCommander:
                 writedata = self.write_queue.get(timeout=0.1)
                 if writedata:
                     serial_write_read(writedata)
-            except Exception as e:
-                print(e)
+            except queue.Empty:
+                pass
 
             serial_write_read(b"#end-cycle-%s\n" % cycle_id)
 
@@ -193,6 +197,10 @@ if __name__ == "__main__":
         tracker = ArduinoStateTracker()
 
         i = 0
+
+        def p(i):
+            print(i)
+        tracker.append(p)
         
         while not s.flag_exit.is_set():
             i += 1
