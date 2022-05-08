@@ -9,60 +9,86 @@ import re
 import json
 import serial
 
-from .serial_commander import ArduinoStateTracker, SerialCommander
+from .devices import PreconfiguredDevices
+from .serial_commander import SerialCommander
+from .stoppable_thread import StoppableThread
 
 
+class DeviceController(StoppableThread):
 
+    def __init__(self, devices_config, **kvargs):
+        StoppableThread.__init__(self)
+        
+        self.__preconfigured_devices = PreconfiguredDevices(devices_config)
+        self.__sc_kvargs = kvargs
+        self.__send_queue = queue.Queue()
 
-class DeviceController:
+        self.state = None
 
-    def __init__(self):
-        self.serial_state_tracker = ArduinoStateTracker()
-        self.flag_exit = threading.Event()
-        self._t = None
+    def __read_signal_buffer(self):
+        if self.state and "signal_buffer" in self.state:
+            return self.state["signal_buffer"]
+        return None
 
-        def p(i):
-            print(i)
-        self.serial_state_tracker.append(p)
+    def __read_signal_sent(self):
+        if self.state and "signal_sent" in self.state:
+            return self.state["signal_sent"]
+        return None
 
-    def loop(self):
-        while not self.flag_exit.is_set():
-            if None != self._t:
-                print("Serial communication broken. Restart...")
-            self._t = threading.Thread(target=self._listen_job)
-            self._t.start()
-            while not self.flag_exit.is_set():
+    def on_tracker_state(self,p):
+        self.state = p
+
+    def run(self):
+        def set_and_send(sc, signal):
+            for i in range(0, 3):
+                sc.set_signal(signal)
+                sc.send_signal()
+            return True
+            
+        with SerialCommander(**self.__sc_kvargs) as sc:
+            sc.on_change.append(self.on_tracker_state)
+            while not self.stop:
                 try:
-                    if self._t.is_alive(): time.sleep(1)
-                except KeyboardInterrupt as e:
-                    self.flag_exit.set()
-
+                    signal = self.__send_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                except KeyboardInterrupt:
+                    break
+                set_and_send(sc, signal)
+                    
 
     def __enter__(self, *args, **kvargs):
+        self.start()
         return self
 
     def __exit__(self, *args, **kvargs):
-        self.flag_exit.set()
+        self.stop = True
 
-    def _listen_job(self):
-        with SerialCommander(
-            port=sys.argv[1],
-            baudrate=9600,
-            bytesize=8,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            timeout=None
-        ) as s:
-            while not s.flag_exit.is_set():
-                try:
-                    r = s.read_queue.get(timeout=1)
-                    self.serial_state_tracker.feed(r)
-                except KeyboardInterrupt as e:
-                    exit()
-                except Exception:
-                    pass
+    # device specific
+
+    @property
+    def preconfigured_devices(self):
+        return repr(self.__preconfigured_devices)
+
+    def send_raw_signal(self, signal):
+        self.__send_queue.put(signal)
+
+    def action(self, device_name, action_name):
+        signal = self.__preconfigured_devices.action(device_name, action_name)
+        self.send_raw_signal(signal)
+
+
 
 
 if __name__ == "__main__":
-    with DeviceController() as dc:
-        dc.loop()
+    
+    with DeviceController(
+        port=sys.argv[1],
+        baudrate=9600,
+        bytesize=8,
+        parity=serial.PARITY_NONE,
+        stopbits=serial.STOPBITS_ONE,
+        timeout=None
+    ) as s:
+        s.join()
+

@@ -10,6 +10,7 @@ import re
 import json
 
 from .event import EventEmitter
+from .stoppable_thread import StoppableThread
 
 
 
@@ -93,61 +94,72 @@ class ArduinoStateTracker(EventEmitter):
             except Exception as e:
                 print(e)
 
-        self(str(self))
+        self(self.state)
 
-    def __str__(self):
-        return json.dumps({
+    @property
+    def state(self):
+        return {        
             "last_update": self.last_update,
             "signal_buffer": self.signal_buffer,
             "connected": self.connected,
             "signal_sent": self.signal_sent,
             "accepted_signal_bits": self.accepted_signal_bits,
-        })
+        }
+
+    def __str__(self):
+        return json.dumps(self.state)
 
 
 
-class SerialCommander:
+class SerialCommander(StoppableThread):
 
     def __init__(self, **kvargs):
+        StoppableThread.__init__(self)
+
         kvargs["timeout"] = 1
         self.serial_device = serial.Serial(**kvargs)
 
-        self.write_queue = queue.Queue() # write to serial
-        self.read_queue = queue.Queue() # read from serial
-        self.flag_exit = threading.Event()
+        self.__write_queue = queue.Queue() # write to serial
+        
+        self.__tracker = ArduinoStateTracker()
+        self.on_change = EventEmitter()
+        self.__tracker.append(self.on_change)
 
     def set_signal(self, signalbuffer):
         if type(signalbuffer) == str:
             signalbuffer = signalbuffer.encode("ascii")
-        self.write_queue.put(b"+%s\n" % signalbuffer)
+        self.__write_queue.put(b"+%s\n" % signalbuffer)
+        return True
 
     def send_signal(self):
-        self.write_queue.put(b">\n")
+        self.__write_queue.put(b">\n")
 
     def reset(self):
-        self.write_queue.put(b"R\n\r" * 10)
+        self.__write_queue.put(b"R\n\r" * 10)
 
-    def _job(self):
+    def run(self):
 
         def serial_write_read(data=None):
             try:
                 if data:
                     self.serial_device.write(data)
-                time.sleep(1)
+                time.sleep(0.5)
                 readdata = self.serial_device.read_all()
                 if readdata:
                     readlines = [
                         e for e in [e.strip() for e in readdata.split(b"\n")]
                         if e
                     ]
-                    for l in readlines: self.read_queue.put(l)
+                    for l in readlines:
+                        print(l)
+                        self.__tracker.feed(l)
             except Exception as e:
-                self.flag_exit.set()
+                self.stop = True
                 print(e)
                 
         time.sleep(0.5)
-        while not self.flag_exit.is_set():
-            if self.flag_exit.is_set(): break
+        while not self.stop:
+            if self.stop: break
             cycle_id = os.urandom(16).hex().encode("ascii")
 
             if not self.serial_device.is_open:
@@ -161,7 +173,7 @@ class SerialCommander:
             serial_write_read(b"?\n\r")
             
             try:
-                writedata = self.write_queue.get(timeout=0.1)
+                writedata = self.__write_queue.get(timeout=0.1)
                 if writedata:
                     serial_write_read(writedata)
             except queue.Empty:
@@ -174,12 +186,11 @@ class SerialCommander:
             self.serial_device.open()
         except:
             pass
-        self.job = threading.Thread(target=self._job)
-        self.job.start()
+        self.start()
         return self
 
     def __exit__(self, *args, **kvargs):
-        self.flag_exit.set()
+        self.stop = True
         self.serial_device.close()
 
 
@@ -194,15 +205,13 @@ if __name__ == "__main__":
         timeout=None
     ) as s:
 
-        tracker = ArduinoStateTracker()
-
         i = 0
 
         def p(i):
-            print(i)
-        tracker.append(p)
+            print(">>>>", i)
+        s.tracker.append(p)
         
-        while not s.flag_exit.is_set():
+        while 1:
             i += 1
 
             if i == 3:
@@ -213,11 +222,3 @@ if __name__ == "__main__":
 
             if i == 6:
                 s.reset()
-
-            try:
-                r = s.read_queue.get(timeout=1)
-                tracker.feed(r)
-            except KeyboardInterrupt as e:
-                exit()
-            except Exception:
-                pass
