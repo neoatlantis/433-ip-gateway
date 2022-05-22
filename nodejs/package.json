@@ -1,0 +1,14 @@
+{
+  "name": "na433controller",
+  "version": "1.0.0",
+  "description": "NeoAtlantis 433MHz Gateway",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "NeoAtlantis",
+  "license": "GPL-3.0",
+  "dependencies": {
+    "serialport": "^10.4.0"
+  }
+}
